@@ -3,18 +3,22 @@ from Generate_network import generate_network
 from plotting_functions import plotting
 import numpy as np
 import matplotlib.pyplot as plt
+import random
 
 seed = 1
+random.seed(seed)
 plots = plotting(seed)
 num_nodes = 20
-k = 13
-p = 0.1
-inhib_ratio = 0
-inhib_str = 0
+num_clusters = 1
+inter_prob = 0.01
+P = np.ones([num_clusters ,num_clusters])* inter_prob
+intra_prob = 0.2
+np.fill_diagonal(P, intra_prob)
+
 
 params_soma = []
 params_dendrite = []
-I = 0.5
+I = -0.5e-3
 V_rest = -57
 
 def alpha_n(V): 
@@ -56,54 +60,69 @@ l_init = steady_state_value(alpha_l(V_rest), beta_l(V_rest))
 q_init = steady_state_value(alpha_q(V_rest), beta_q(V_rest))
 r_init = steady_state_value(alpha_r(V_rest), beta_r(V_rest))
 s_init = steady_state_value(alpha_s(V_rest), beta_s(V_rest))
+print(r_init)
+print(s_init)
 
-print(n_init)
+
 # Parameters soma
 params_soma = [
     0.5,    # g_Ca conductance (mS/cm²)
-    0.1,    # g_h conductance (mS/cm²)
+    0.05,   # g_h conductance (mS/cm²)
     120.0,  # E_Ca Calcium reversal potential (mV)
     -43.0,  # E_h reversal potential (mV)
-    0.02,   # g_L Leak conductance (mS/cm²)
+    0.1,    # g_L Leak conductance (mS/cm²)
     -65.0,  # E_L Leak reversal potential (mV)
-    50.0,   # g_Na Sodium conductance (mS/cm²)
+    20.0,   # g_Na Sodium conductance (mS/cm²)
     55.0,   # E_Na Sodium reversal potential (mV)
-    10.0,   # g_K Potassium conductance (mS/cm²)
+    5.0,    # g_K Potassium conductance (mS/cm²)
     -75.0,  # E_K Potassium reversal potential (mV)
-    0.1,    # g_sd Coupling conductance between soma and dendrites (mS/cm²)
+    1,    # g_sd Coupling conductance between soma and dendrites (mS/cm²)
     1.0,    # Cm Membrane capacitance (µF/cm²)
-    0.1     # p
+    0.2     # p (scaling factor)
 ]
-
 params_dendrite = [
-    1.0,    # g_Ca conductance (mS/cm²)
+    0.1,    # g_Ca conductance (mS/cm²)
     120.0,  # E_Ca Calcium reversal potential (mV)
-    0.02,   # g_L Leak conductance (mS/cm²)
+    0.05,   # g_L Leak conductance (mS/cm²)
     -65.0,  # E_L Leak reversal potential (mV)
-    20.0,   # g_K Potassium conductance (mS/cm²)
+    5.0,    # g_K Potassium conductance (mS/cm²)
     -75.0,  # E_K Potassium reversal potential (mV)
-    0.1,    # g_sd Coupling conductance between soma and dendrites (mS/cm²)
+    1,    # g_sd Coupling conductance between soma and dendrites (mS/cm²)
     1.0,    # Cm Membrane capacitance (µF/cm²)
-    0.1     # p
+    0.2     # p (scaling factor)
 ]
 
 network = generate_network(seed)
-W, G  = network.get_network(num_nodes,k,p,inhib_ratio, inhib_str)
-plots.plot_network(G)
+
+W,G = network.get_network(num_nodes, num_clusters, P)
+#W, G  = network.create_interconnected_network(int(num_nodes/num_sub_networks),k,p,inhib_ratio, inhib_str, num_sub_networks, interconnect_ratio)
+
+plots.plot_network(G,W)
+#plots.plot_combined_subnetworks(G, num_nodes, num_sub_networks)
 plots.visualize_weight_matrix(W)
+plots.plot_degree(G)
+
+
+edge_lengths = network.calculate_edge_lengths(G)
 
 
 neurons = []
 for i in range(num_nodes):
+    size_soma = random.uniform(1e-5, 1e-4) #area in cm2
     number_of_dendrites = int(np.sum(W[i]))
     connections = []
+    length_connection = []
+    radius_dendrites = []
     for j in range(len(W[i])):
         if W[i][j] == 1:
+            radius_dendrites.append(random.uniform(0.1e-5, 2e-5)) #radius in cm
             connections.append(j)
-    neurons.append(Neuron(number_of_dendrites, connections, params_soma, params_dendrite, V_rest,V_rest,n_init,h_init,k_init,l_init,q_init,r_init,s_init))
+            length_connection.append(edge_lengths[(i,j)])
+    neurons.append(Neuron(number_of_dendrites, connections, length_connection, size_soma, radius_dendrites, params_soma, params_dendrite, V_rest,V_rest,n_init,h_init,k_init,l_init,q_init,r_init,s_init))
 
 
-g_GJ =0.01
+g_GJ_dend_dend = 0.1
+g_GJ_dend_soma = 0.1
 def simulate(T,T_pre,dt):
 
     
@@ -136,6 +155,7 @@ def simulate(T,T_pre,dt):
         r_all[num].append(r)
         s_all[num].append(s)
     t = 0
+
     while t < T + T_pre:
         for num,neuron in enumerate(neurons):
             V_soma = V_all_soma[num][-1]
@@ -149,23 +169,35 @@ def simulate(T,T_pre,dt):
             s = s_all[num][-1]
 
             coupled_neurons_index = np.where(W[:,num] == 1)[0]
-            I_GJ = 0
+            I_GJ_dend_dend = 0
+            I_GJ_dend_soma = 0
             if len(coupled_neurons_index) != 0:
                 for j in range(len(coupled_neurons_index)):
                     
                     if num in neurons[coupled_neurons_index[j]].connections:
                         coupled_dendrite = neurons[coupled_neurons_index[j]].connections.index(num)
                         V_dendrite_coupled = V_all_dend[coupled_neurons_index[j]][-1][coupled_dendrite]
-                        I_GJ = I_GJ + (V_dendrite_coupled - V_soma)*g_GJ
+                        if len(neurons[num].dendrites) != 0:
+                            random.seed((num, j))
+                            random_dendrite_ind = random.randint(0, len(neurons[num].dendrites) - 1) 
+                            I_GJ_dend_dend = I_GJ_dend_dend+ (V_all_dend[num][-1][random_dendrite_ind] - V_dendrite_coupled)*g_GJ_dend_dend * neurons[coupled_neurons_index[j]].dendrites[coupled_dendrite].radius_dendrite**2*np.pi
+                        else:
+                            I_GJ_dend_soma = I_GJ_dend_soma + (V_soma- V_dendrite_coupled)*g_GJ_dend_soma * neurons[coupled_neurons_index[j]].dendrites[coupled_dendrite].radius_dendrite**2*np.pi
 
-
-            if t > T_pre:
-                V_soma,n,h,k,l,q  = neuron.soma.RK_soma(V_soma, V_dend, n, h, k, l, q, I + np.random.normal(0, abs(I) / 4) + I_GJ, dt)
+            radii = [dendrite.radius_dendrite for dendrite in neuron.dendrites]
+            num_dends = len(neuron.dendrites)
+            if T > T_pre:
+                V_soma,n,h,k,l,q  = neuron.soma.RK_soma(V_soma, V_dend, n, h, k, l, q, I + abs(I/10) * np.random.randn()   , dt, radii, num_dends, I_GJ_dend_soma)
             else:
-                V_soma,n,h,k,l,q  = neuron.soma.RK_soma(V_soma, V_dend, n, h, k, l, q, I_GJ, dt)
+                V_soma,n,h,k,l,q  = neuron.soma.RK_soma(V_soma, V_dend, n, h, k, l, q, I + abs(I/10) * np.random.randn() , dt, radii,num_dends,  0)
 
+            
             for i,dendrite in enumerate(neuron.dendrites):
-                V_dend[i], r[i], s[i] = dendrite.RK_dend(V_soma, V_dend[i], r[i], s[i], dt)
+                if i == random_dendrite_ind:
+                    V_dend[i], r[i], s[i]= dendrite.RK_dend(V_soma, V_dend[i], r[i], s[i], dt, num_dends, I_GJ_dend_dend)
+                else:
+                    V_dend[i], r[i], s[i] = dendrite.RK_dend(V_soma, V_dend[i], r[i], s[i], dt, num_dends)
+
 
             V_all_soma[num].append(V_soma)
             V_all_dend[num].append(V_dend)
@@ -182,24 +214,9 @@ def simulate(T,T_pre,dt):
 
 
 
-
+T_pre = 0
+T = 10
 dt = 0.01
-V_all_soma, V_all_dend  = simulate(100,100,dt)
+V_all_soma, V_all_dend  = simulate(T,T_pre, dt)
+plots.plot_traces(V_all_soma, T_pre, dt)
 
-
-
-
-def plot_soma_voltages(V_all_soma, T_pre, dt):
-    num_neurons = len(V_all_soma)
-    fig, axes = plt.subplots(num_neurons, 1, figsize=(10, 2 * num_neurons), sharex=True)
-    time_to_track = int(T_pre/dt)
-    for i in range(num_neurons):
-        axes[i].plot(V_all_soma[i][time_to_track:])
-        axes[i].set_title(f'Neuron {i+1} Soma Voltage')
-        axes[i].set_ylabel('Voltage (mV)')
-    
-    axes[-1].set_xlabel('Time (ms)')
-    plt.tight_layout()
-    plt.show(block = False)
-
-plot_soma_voltages(V_all_soma, 100, dt)

@@ -22,96 +22,53 @@ class generate_network():
         np.random.seed(seed)
         
         
-    def get_network(self, num_nodes, k, p, inhibitory_ratio, inhibitory_strength):
+    def get_network(self, n, k, P):
         """
-        Generatethe network structure using an adapted Strogatz-Watts algorithm
-        ----------
+        Generate a directed binary stochastic block model graph.
 
-        num_nodes: int
-            number of nodes in the network
+        Parameters:
+        n : int
+            Total number of nodes.
+        k : int
+            Number of communities.
+        P : 2D array
+            k x k matrix of edge probabilities between communities.
 
-        k: float
-            Determines the number of neighbours in the inital lattice structure of the network
-
-        p: float
-            The rewiring probility of the network
-
-        inhibitory_ratio: float
-            Determines what fraction of the nodes will be inhibitory
-
-        inhibitory_strengh:
-            The weight of the inhibitory connections
-
-
-        Returns
-        -------
-        weight_matrix: 2d array of ints
-            The weight matrix of the resulting network
-
-        directed_graph: networkx object
-            The network object of the resulting network
-
+        Returns:
+        G : NetworkX DiGraph
+            Generated directed binary SBM graph.
+        weight_matrix : 2D array
+            n x n matrix of edge weights (0 or 1).
         """
+        # Assign nodes to communities
+        community_sizes = [n // k] * k
+        for i in range(n % k):
+            community_sizes[i] += 1
 
-        # Create an initial undirected network using the Watts-Strogatz small-world model
-        undirected_graph = nx.watts_strogatz_graph(
-            num_nodes, k, p, seed=self.seed)
+        node_community = []
+        for i, size in enumerate(community_sizes):
+            node_community.extend([i] * size)
+        np.random.shuffle(node_community)
 
-        # Convert the undirected graph to a directed graph with random edge directionality
-        directed_graph = nx.DiGraph()
-        for edge in undirected_graph.edges():
-            if random.choice([True, False]):
-                directed_graph.add_edge(edge[0], edge[1], weight=1)
-            else:
-                directed_graph.add_edge(edge[1], edge[0], weight=1)
+        # Initialize weight matrix
+        weight_matrix = np.zeros((n, n))
 
-        # Determine the number of inhibitory connections
-        num_edges = directed_graph.number_of_edges()
-        num_inhibitory_connections = int(inhibitory_ratio * num_edges)
+        # Create directed graph
+        G = nx.DiGraph()
+        G.add_nodes_from(range(n))
 
-        # Convert a portion of the connections to inhibitory
-        all_edges = list(directed_graph.edges(data=True))
-        random.shuffle(all_edges)
-        for edge in all_edges[:num_inhibitory_connections]:
-            edge[2]['weight'] = inhibitory_strength
+        # Generate edges and weights based on P
+        for i in range(n):
+            for j in range(n):
+                if i != j:
+                    ci = node_community[i]
+                    cj = node_community[j]
+                    if np.random.rand() < P[ci, cj]:
+                        G.add_edge(i, j, weight=1)
+                        weight_matrix[i, j] = 1
 
-        # Metrics for directed graph
-        clustering_directed = nx.average_clustering(
-            directed_graph, count_zeros=True)
-        largest_scc = max(nx.strongly_connected_components(
-            directed_graph), key=len)
-        subgraph = directed_graph.subgraph(largest_scc)
-        path_length_directed = nx.average_shortest_path_length(subgraph) if nx.is_strongly_connected(
-            subgraph) else float('inf')
+        return weight_matrix,G
 
-        # Regular lattice (k nearest neighbors in a directed ring)
-        lattice = nx.DiGraph()
-        nodes = list(range(num_nodes))
-        half_k = k // 2  # considering k nearest neighbors: half from left and half from right
-        for i in nodes:
-            for j in range(1, half_k + 1):
-                lattice.add_edge(i, (i + j) % num_nodes)
-                lattice.add_edge(i, (i - j) % num_nodes)
-        clustering_lattice = nx.average_clustering(lattice, count_zeros=True)
-        path_length_lattice = nx.average_shortest_path_length(lattice)
-
-        # Random directed graph
-
-        random_graph = nx.fast_gnp_random_graph(
-            num_nodes, p, directed=True, seed=self.seed)
-        clustering_random = nx.average_clustering(
-            random_graph, count_zeros=True)
-        largest_scc_random = max(
-            nx.strongly_connected_components(random_graph), key=len)
-        subgraph_random = random_graph.subgraph(largest_scc_random)
-        path_length_random = nx.average_shortest_path_length(subgraph_random) if nx.is_strongly_connected(
-            subgraph_random) else float('inf')
-
-        # Create weight matrix
-        weight_matrix = nx.to_numpy_array(directed_graph)
-
-        return weight_matrix, directed_graph
-    
 
     def create_interconnected_network(self, num_nodes, k, p, inhibitory_ratio, inhibitory_strength, num_sub_networks, interconnect_ratio):
 
@@ -190,3 +147,28 @@ class generate_network():
         combined_weight_matrix = nx.to_numpy_array(combined_graph)
         
         return combined_weight_matrix, combined_graph
+
+
+    def calculate_edge_lengths(self,G):
+        """
+        Calculates the length of the edges in the graph G based on a spring layout.
+
+        Parameters:
+        -----------
+        G : networkx.Graph
+            The input graph.
+        seed : int, optional
+            Seed for the random number generator (default is None).
+
+        Returns:
+        --------
+        edge_lengths : dict
+            A dictionary with edges as keys and their lengths as values.
+        """
+        # Compute the spring layout positions for each node
+        pos = nx.spring_layout(G, seed=self.seed)
+
+        # Calculate the Euclidean distance for each edge based on node positions
+        edge_lengths = {edge: np.linalg.norm(np.array(pos[edge[0]]) - np.array(pos[edge[1]])) for edge in G.edges()}
+
+        return edge_lengths
